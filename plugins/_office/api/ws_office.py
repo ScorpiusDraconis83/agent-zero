@@ -92,5 +92,5 @@ def _public_doc(doc: dict[str, Any]) -> dict[str, Any]:
         "size": doc["size"],
         "version": document_store.item_version(doc),
         "last_modified": doc["last_modified"],
-                "exists": Path(doc["path"]).exists(),
+        "exists": Path(doc["path"]).exists(),
     }

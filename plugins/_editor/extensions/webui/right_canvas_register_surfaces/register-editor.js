@@ -29,12 +29,6 @@ export default async function registerEditorSurface(surfaces) {
     beginDockHandoff() {
       editorStore.beginSurfaceHandoff?.();
     },
-    finishDockHandoff() {
-      editorStore.finishSurfaceHandoff?.();
-    },
-    cancelDockHandoff() {
-      editorStore.cancelSurfaceHandoff?.();
-    },
     async open(payload = {}) {
       const panel = await waitForElement('[data-surface-id="editor"] .editor-panel');
       if (!panel) throw new Error("Editor surface panel did not mount.");

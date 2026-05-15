@@ -6,7 +6,7 @@ import { open as openSurface } from "/js/surfaces.js";
 const SYNC_WINDOW_MS = 10 * 60 * 1000;
 const syncedDocumentResults = new Set();
 
-export default async function syncDocumentResultsIntoOpenOfficeModal(context) {
+export default async function syncDocumentResultsIntoOpenSurfaces(context) {
   if (!context?.results?.length || context.historyEmpty) return;
 
   for (const { args } of context.results) {

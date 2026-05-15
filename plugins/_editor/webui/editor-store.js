@@ -219,7 +219,6 @@ const model = {
   _pendingFocusEnd: true,
   _focusAttempts: 0,
   _headerCleanup: null,
-  _surfaceHandoff: false,
   _settingSourceEditorValue: false,
   _sourceEditorChangeHandler: null,
   _previewEnhanceTimer: null,
@@ -235,11 +234,18 @@ const model = {
 
   async onMount(element = null, options = {}) {
     await this.init();
-    if (element) this._root = element;
+    if (element && element !== this._root) {
+      if (this.sourceEditor && !element.contains?.(this.sourceEditor.container)) {
+        this.destroySourceEditor();
+      }
+      this._root = element;
+    }
     this._mode = options?.mode === "canvas" ? "canvas" : "modal";
-    if (this._mode === "modal") this.setupMarkdownModal(element);
+    if (this._mode === "modal") {
+      this.setupMarkdownModal(element);
+      await this.ensureInitialMarkdownFile();
+    }
     this.scheduleSourceEditorInit();
-    this.queueRender();
   },
 
   async onOpen(payload = {}) {
@@ -272,16 +278,7 @@ const model = {
   },
 
   beginSurfaceHandoff() {
-    this._surfaceHandoff = true;
     this.flushInput();
-  },
-
-  finishSurfaceHandoff() {
-    this._surfaceHandoff = false;
-  },
-
-  cancelSurfaceHandoff() {
-    this._surfaceHandoff = false;
   },
 
   async refresh() {
@@ -379,7 +376,6 @@ const model = {
     this.previewEditDirty = false;
     this.previewEditPageIndex = this.activePageIndex;
     this.previewEditText = page.markdown || "";
-    this.queueRender({ force: true, focus: false });
     globalThis.requestAnimationFrame?.(() => {
       const editor = this._root?.querySelector?.("[data-editor-preview-source]");
       editor?.focus?.({ preventScroll: true });
@@ -454,7 +450,6 @@ const model = {
     this.clampActivePage();
     this.schedulePreviewEnhance();
     if (!options.silent && options.message) this.setMessage(options.message);
-    this.queueRender({ force: true, focus: false });
     return true;
   },
 
@@ -1131,6 +1126,9 @@ const model = {
   initSourceEditor() {
     if (!this.isSourceMode() || !this._root) return;
     const container = this._root.querySelector?.("[data-editor-ace]");
+    if (this.sourceEditor && !this._root.contains?.(this.sourceEditor.container)) {
+      this.destroySourceEditor();
+    }
     if (!container || this.sourceEditor) return;
     if (!globalThis.ace?.edit) {
       this.aceUnavailable = true;
@@ -1359,7 +1357,6 @@ const model = {
     if (wasActive) this.session = next;
     const index = this.tabs.findIndex((tab) => tab.tab_id === (previous?.tab_id || next.tab_id));
     if (index >= 0) this.tabs.splice(index, 1, next);
-    this.queueRender();
   },
 
   setMessage(value) {
@@ -1425,7 +1422,7 @@ const model = {
       this.session.dirty = markDirty || this.session.dirty;
     }
     if (markDirty) this.markDirty();
-    this.queueRender({ force: true, focus: true });
+    this.queueRender({ focus: true });
   },
 
   markDirty() {

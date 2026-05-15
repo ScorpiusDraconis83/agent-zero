@@ -222,13 +222,16 @@ def test_office_frontend_is_document_only_and_does_not_import_browser_or_desktop
 
     assert "office-source-editor" not in office_panel
     assert "data-office-source" not in office_panel
+    assert "office-document-header" not in office_panel
     assert "runNewMenuAction('markdown')" not in office_panel
     assert 'data-office-new-action="markdown"' not in office_store
-    assert "openRenameModal" in office_store
-    assert "office_save" in office_store
-    assert 'callOffice("renamed"' in office_store
+    assert "openRenameModal" not in office_store
+    assert "office_save" not in office_store
+    assert 'callOffice("renamed"' not in office_store
+    assert "data-office-source" not in office_store
+    assert "office_input" not in office_store
     assert "requires_desktop" in office_store
-    assert "openSurface(\"desktop\"" in office_store
+    assert "openSurface(\"desktop\"" not in office_store
 
 
 def test_desktop_plugin_owns_routes_runtime_surface_and_state_paths():
@@ -333,7 +336,7 @@ def test_document_artifacts_only_open_desktop_from_explicit_document_ui_requests
     assert 'surfaces.open("desktop"' not in auto_open
     assert "rightCanvas.open" not in auto_open
     assert "globalThis.Alpine" not in auto_open
-    assert "syncDocumentResultsIntoOpenOfficeModal" in auto_open
+    assert "syncDocumentResultsIntoOpenSurfaces" in auto_open
     assert "isOfficeCanvas" not in auto_open
     assert "officeStore" in auto_open
     assert "desktopStore" in auto_open

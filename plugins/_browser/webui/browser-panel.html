@@ -177,6 +177,7 @@
             <span class="material-symbols-outlined browser-address-icon">language</span>
 	            <input class="browser-address" aria-label="Browser address" name="browser_address" x-model="$store.browserPage.address"
 	              @focus="$store.browserPage.onAddressFocus()" @blur="$store.browserPage.onAddressBlur()"
+	              @keydown.enter.prevent="$store.browserPage.go()"
 	              :disabled="$store.browserPage.isBusy()"
 	              placeholder="https://example.com" autocomplete="off" />
           </form>

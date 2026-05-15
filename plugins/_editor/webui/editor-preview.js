@@ -169,7 +169,7 @@ function prepareFootnotes(markdown = "", fullMarkdown = markdown) {
   });
 
   prepared += "\n\n<section class=\"editor-footnotes\" aria-label=\"Footnotes\">\n<ol>\n";
-  for (const [index, definition] of definitions.entries()) {
+  for (const definition of definitions) {
     const safeId = footnoteId(definition.id);
     prepared += `<li id="fn-${safeId}">${escapeHtml(definition.text)} <a class="editor-footnote-backref" href="#fnref-${safeId}-1">Back</a></li>\n`;
   }

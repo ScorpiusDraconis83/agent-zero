@@ -393,6 +393,12 @@
     }
 
     .editor-icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      padding: 0;
       border: 1px solid color-mix(in srgb, var(--color-border), transparent 12%);
       border-radius: 8px;
       background: color-mix(in srgb, var(--color-panel), var(--color-background) 16%);
@@ -474,9 +480,6 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-
-    .editor-tab-title {
       font-size: 0.88rem;
       font-weight: 600;
       letter-spacing: 0;
@@ -592,15 +595,6 @@
       padding: 0 9px;
       font: inherit;
       font-size: 13px;
-    }
-
-    .editor-icon-button {
-      display: inline-grid;
-      place-items: center;
-      width: 32px;
-      height: 32px;
-      min-width: 32px;
-      padding: 0;
     }
 
     .editor-icon-button:hover:not(:disabled) {
