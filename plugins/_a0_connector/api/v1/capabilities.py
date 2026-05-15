@@ -17,6 +17,7 @@ _BASE_FEATURES = [
     "pause",
     "nudge",
     "message_send",
+    "message_queue",
     "log_tail",
     "projects",
     "text_editor_remote",

@@ -49,6 +49,10 @@ PROTOCOL_VERSION = "a0-connector.v1"
 WS_FEATURES = [
     "connector_subscribe_context",
     "connector_send_message",
+    "message_queue",
+    "connector_message_queue_add",
+    "connector_message_queue_remove",
+    "connector_message_queue_send",
     "text_editor_remote",
     "remote_file_tree",
     "code_execution_remote",
@@ -128,6 +132,15 @@ class WsConnector(WsHandler):
 
         if event == "connector_send_message":
             return await self._handle_send_message(data, sid)
+
+        if event == "connector_message_queue_add":
+            return await self._handle_message_queue_add(data, sid)
+
+        if event == "connector_message_queue_remove":
+            return await self._handle_message_queue_remove(data, sid)
+
+        if event == "connector_message_queue_send":
+            return await self._handle_message_queue_send(data, sid)
 
         if event == "connector_file_op_result":
             return self._handle_file_op_result(data, sid)
@@ -246,6 +259,7 @@ class WsConnector(WsHandler):
                 "context_id": context_id,
                 "events": events,
                 "last_sequence": last_sequence,
+                "message_queue": self._queue_items_for_context(context),
             },
             correlation_id=data.get("correlationId"),
         )
@@ -341,6 +355,7 @@ class WsConnector(WsHandler):
                     "context_id": context_id,
                     "events": events,
                     "last_sequence": last_sequence,
+                    "message_queue": self._queue_items_for_context(context),
                 },
                 correlation_id=data.get("correlationId"),
             )
@@ -370,6 +385,162 @@ class WsConnector(WsHandler):
             "client_message_id": client_message_id or None,
         }
 
+    async def _handle_message_queue_add(
+        self,
+        data: dict[str, Any],
+        sid: str,
+    ) -> dict[str, Any] | WsResult:
+        from agent import AgentContext
+        from helpers import message_queue as mq
+        from helpers.state_monitor_integration import mark_dirty_for_context
+
+        context_id = str(data.get("context_id", data.get("context", ""))).strip()
+        message = str(data.get("message", data.get("text", ""))).strip()
+        client_message_id = str(data.get("client_message_id", data.get("item_id", ""))).strip()
+        raw_attachments = list(data.get("attachments", [])) if isinstance(data.get("attachments"), list) else []
+        attachments, attachment_error = self._normalize_attachment_refs(raw_attachments)
+        if attachment_error:
+            return WsResult.error(
+                code="INVALID_ATTACHMENTS",
+                message=attachment_error,
+                correlation_id=data.get("correlationId"),
+            )
+        if not context_id:
+            return WsResult.error(
+                code="MISSING_CONTEXT_ID",
+                message="context_id is required",
+                correlation_id=data.get("correlationId"),
+            )
+        if not message and not attachments:
+            return WsResult.error(
+                code="MISSING_MESSAGE",
+                message="message or attachments are required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        context = AgentContext.get(context_id)
+        if context is None:
+            return WsResult.error(
+                code="CONTEXT_NOT_FOUND",
+                message=f"Context '{context_id}' not found",
+                correlation_id=data.get("correlationId"),
+            )
+
+        item = mq.add(
+            context,
+            message,
+            attachments,
+            item_id=client_message_id or data.get("correlationId") or None,
+        )
+        mark_dirty_for_context(context_id, reason="connector_message_queue_add")
+        await self._emit_message_queue_updated(context_id=context_id, context=context)
+
+        return {
+            "context_id": context_id,
+            "status": "queued",
+            "item": self._queue_item_payload(item),
+            "message_queue": self._queue_items_for_context(context),
+        }
+
+    async def _handle_message_queue_remove(
+        self,
+        data: dict[str, Any],
+        sid: str,
+    ) -> dict[str, Any] | WsResult:
+        from agent import AgentContext
+        from helpers import message_queue as mq
+        from helpers.state_monitor_integration import mark_dirty_for_context
+
+        context_id = str(data.get("context_id", data.get("context", ""))).strip()
+        item_id = str(data.get("item_id", "") or "").strip() or None
+        if not context_id:
+            return WsResult.error(
+                code="MISSING_CONTEXT_ID",
+                message="context_id is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        context = AgentContext.get(context_id)
+        if context is None:
+            return WsResult.error(
+                code="CONTEXT_NOT_FOUND",
+                message=f"Context '{context_id}' not found",
+                correlation_id=data.get("correlationId"),
+            )
+
+        remaining = mq.remove(context, item_id)
+        mark_dirty_for_context(context_id, reason="connector_message_queue_remove")
+        await self._emit_message_queue_updated(context_id=context_id, context=context)
+
+        return {
+            "context_id": context_id,
+            "status": "removed",
+            "remaining": remaining,
+            "message_queue": self._queue_items_for_context(context),
+        }
+
+    async def _handle_message_queue_send(
+        self,
+        data: dict[str, Any],
+        sid: str,
+    ) -> dict[str, Any] | WsResult:
+        from agent import AgentContext
+        from helpers import message_queue as mq
+        from helpers.state_monitor_integration import mark_dirty_for_context
+
+        context_id = str(data.get("context_id", data.get("context", ""))).strip()
+        item_id = str(data.get("item_id", "") or "").strip() or None
+        send_all = bool(data.get("send_all", False))
+        if not context_id:
+            return WsResult.error(
+                code="MISSING_CONTEXT_ID",
+                message="context_id is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        context = AgentContext.get(context_id)
+        if context is None:
+            return WsResult.error(
+                code="CONTEXT_NOT_FOUND",
+                message=f"Context '{context_id}' not found",
+                correlation_id=data.get("correlationId"),
+            )
+
+        if not mq.has_queue(context):
+            await self._emit_message_queue_updated(context_id=context_id, context=context)
+            return {
+                "context_id": context_id,
+                "status": "empty",
+                "sent_count": 0,
+                "message_queue": [],
+            }
+
+        if send_all:
+            sent_count = mq.send_all_aggregated(context)
+            sent_item_id = None
+        else:
+            item = mq.pop_item(context, item_id) if item_id else mq.pop_first(context)
+            if not item:
+                return WsResult.error(
+                    code="QUEUE_ITEM_NOT_FOUND",
+                    message="Queued message was not found",
+                    correlation_id=data.get("correlationId"),
+                )
+            sent_item_id = item.get("id")
+            mq.send_message(context, item)
+            sent_count = 1
+
+        mark_dirty_for_context(context_id, reason="connector_message_queue_send")
+        await self._emit_message_queue_updated(context_id=context_id, context=context)
+
+        return {
+            "context_id": context_id,
+            "status": "sent",
+            "sent_count": sent_count,
+            "sent_item_id": sent_item_id,
+            "message_queue": self._queue_items_for_context(context),
+        }
+
     def _normalize_attachment_refs(self, attachments: list[Any]) -> tuple[list[str], str]:
         refs: list[str] = []
         for attachment in attachments:
@@ -397,6 +568,71 @@ class WsConnector(WsHandler):
             refs.append(ref)
 
         return refs, ""
+
+    def _queue_item_payload(self, item: dict[str, Any]) -> dict[str, Any]:
+        text = str(item.get("text", "") or "")
+        attachments = [
+            str(attachment).split("/")[-1]
+            for attachment in item.get("attachments", [])
+            if str(attachment or "").strip()
+        ]
+        return {
+            "id": str(item.get("id", "") or ""),
+            "seq": int(item.get("seq", 0) or 0),
+            "text": text[:100] + "..." if len(text) > 100 else text,
+            "attachments": attachments,
+            "attachment_count": len(item.get("attachments", []) or []),
+        }
+
+    def _queue_items_for_context(self, context: AgentContext | None) -> list[dict[str, Any]]:
+        if context is None:
+            return []
+        try:
+            from helpers import message_queue as mq
+
+            return [self._queue_item_payload(item) for item in mq.get_queue(context)]
+        except Exception:
+            return []
+
+    def _queue_state_for_context_id(self, context_id: str) -> tuple[str, list[dict[str, Any]]]:
+        try:
+            from agent import AgentContext
+
+            context = AgentContext.get(context_id)
+        except Exception:
+            context = None
+
+        items = self._queue_items_for_context(context)
+        signature = repr(items)
+        return signature, items
+
+    def _context_is_running(self, context_id: str) -> bool:
+        try:
+            from agent import AgentContext
+
+            context = AgentContext.get(context_id)
+            return bool(context is not None and context.is_running())
+        except Exception:
+            return False
+
+    async def _emit_message_queue_updated(
+        self,
+        *,
+        context_id: str,
+        context: AgentContext | None = None,
+    ) -> None:
+        payload = {
+            "context_id": context_id,
+            "message_queue": self._queue_items_for_context(context),
+        }
+        for target_sid in subscribed_sids_for_context(context_id):
+            try:
+                await self.emit_to(target_sid, "connector_message_queue_updated", payload)
+            except Exception as exc:
+                PrintStyle.error(
+                    f"[a0-connector] failed to emit connector_message_queue_updated "
+                    f"to {target_sid}: {exc}"
+                )
 
     def _handle_file_op_result(
         self,
@@ -652,12 +888,36 @@ class WsConnector(WsHandler):
     ) -> None:
         # `from_sequence` is a log-output cursor (not an event sequence number).
         cursor = max(int(from_sequence or 0), 0)
+        last_queue_signature, _ = self._queue_state_for_context_id(context_id)
+        was_running = self._context_is_running(context_id)
         try:
             while context_id in subscribed_contexts_for_sid(sid):
                 events, next_cursor = get_context_log_entries(context_id, after=cursor)
                 for event in events:
                     await self.emit_to(sid, "connector_context_event", event)
                 cursor = max(cursor, int(next_cursor or cursor))
+                queue_signature, queue_items = self._queue_state_for_context_id(context_id)
+                if queue_signature != last_queue_signature:
+                    last_queue_signature = queue_signature
+                    await self.emit_to(
+                        sid,
+                        "connector_message_queue_updated",
+                        {
+                            "context_id": context_id,
+                            "message_queue": queue_items,
+                        },
+                    )
+                is_running = self._context_is_running(context_id)
+                if was_running and not is_running:
+                    await self.emit_to(
+                        sid,
+                        "connector_context_complete",
+                        {
+                            "context_id": context_id,
+                            "status": "completed",
+                        },
+                    )
+                was_running = is_running
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             raise
