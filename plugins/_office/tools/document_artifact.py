@@ -254,7 +254,7 @@ class DocumentArtifact(Tool):
                 open_in_desktop=open_in_desktop,
             ) if doc else {
                 "_tool_name": self.name,
-                "canvas_surface": "office",
+                "canvas_surface": "desktop",
                 "action": action,
                 "open_in_canvas": bool(open_in_canvas),
                 "open_in_desktop": bool(open_in_desktop),
@@ -272,14 +272,14 @@ class DocumentArtifact(Tool):
         if not doc:
             return {
                 "_tool_name": self.name,
-                "canvas_surface": "office",
+                "canvas_surface": "desktop",
                 "action": action,
                 "open_in_canvas": bool(open_in_canvas),
                 "open_in_desktop": bool(open_in_desktop),
             }
         return {
             "_tool_name": self.name,
-            "canvas_surface": "office",
+            "canvas_surface": "editor" if doc["extension"] == "md" else "desktop",
             "action": action,
             "open_in_canvas": bool(open_in_canvas),
             "open_in_desktop": bool(open_in_desktop),

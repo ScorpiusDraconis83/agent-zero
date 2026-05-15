@@ -2,15 +2,13 @@ import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 import { getNamespacedClient } from "/js/websocket.js";
 import { store as fileBrowserStore } from "/components/modals/file-browser/file-browser-store.js";
-import { open as openSurface } from "/js/surfaces.js";
 
-const officeSocket = getNamespacedClient("/ws");
-officeSocket.addHandlers(["ws_webui"]);
+const editorSocket = getNamespacedClient("/ws");
+editorSocket.addHandlers(["ws_webui"]);
 
 const SAVE_MESSAGE_MS = 1800;
 const INPUT_PUSH_DELAY_MS = 650;
 const MAX_HISTORY = 80;
-const DESKTOP_DOCUMENT_EXTENSIONS = new Set(["odt", "ods", "odp", "docx", "xlsx", "pptx"]);
 
 function currentContextId() {
   try {
@@ -64,7 +62,7 @@ function placeCaretAtEnd(element) {
   selection.addRange(range);
 }
 
-function normalizeDocument(doc = {}) {
+function normalizeMarkdown(doc = {}) {
   const path = doc.path || "";
   const extension = String(doc.extension || extensionOf(path)).toLowerCase();
   return {
@@ -77,7 +75,7 @@ function normalizeDocument(doc = {}) {
 }
 
 function normalizeSession(payload = {}) {
-  const document = normalizeDocument(payload.document || payload);
+  const document = normalizeMarkdown(payload.document || payload);
   return {
     ...payload,
     document,
@@ -87,7 +85,8 @@ function normalizeSession(payload = {}) {
     title: payload.title || document.title || document.basename || basename(document.path),
     tab_id: uniqueTabId(payload),
     text: String(payload.text || ""),
-    dirty: false,
+    dirty: Boolean(payload.dirty),
+    active: Boolean(payload.active),
   };
 }
 
@@ -95,37 +94,37 @@ function documentLabel(document = {}) {
   return document.title || document.basename || basename(document.path);
 }
 
-async function callOffice(action, payload = {}) {
-  return await callJsonApi("/plugins/_office/office_session", {
+async function callEditor(action, payload = {}) {
+  return await callJsonApi("/plugins/_editor/editor_session", {
     action,
     ctxid: currentContextId(),
     ...payload,
   });
 }
 
-async function requestOffice(eventType, payload = {}, timeoutMs = 5000) {
-  const response = await officeSocket.request(eventType, {
+async function requestEditor(eventType, payload = {}, timeoutMs = 5000) {
+  const response = await editorSocket.request(eventType, {
     ctxid: currentContextId(),
     ...payload,
   }, { timeoutMs });
   const results = Array.isArray(response?.results) ? response.results : [];
-  const first = results.find((item) => item?.ok === true && isOfficeSocketData(item?.data))
+  const first = results.find((item) => item?.ok === true && isEditorSocketData(item?.data))
     || results.find((item) => item?.ok === true);
   if (!first) {
     const error = results.find((item) => item?.error)?.error;
     throw new Error(error?.error || error?.code || `${eventType} failed`);
   }
-  if (first.data?.office_error) {
-    const error = first.data.office_error;
+  if (first.data?.editor_error) {
+    const error = first.data.editor_error;
     throw new Error(error.error || error.code || `${eventType} failed`);
   }
   return first.data || {};
 }
 
-function isOfficeSocketData(data) {
+function isEditorSocketData(data) {
   if (!data || typeof data !== "object") return false;
   return (
-    Object.prototype.hasOwnProperty.call(data, "office_error")
+    Object.prototype.hasOwnProperty.call(data, "editor_error")
     || Object.prototype.hasOwnProperty.call(data, "ok")
     || Object.prototype.hasOwnProperty.call(data, "session_id")
     || Object.prototype.hasOwnProperty.call(data, "document")
@@ -142,6 +141,7 @@ const model = {
   dirty: false,
   error: "",
   message: "",
+  pendingClose: null,
   editorText: "",
   _root: null,
   _mode: "modal",
@@ -154,6 +154,7 @@ const model = {
   _pendingFocusEnd: true,
   _focusAttempts: 0,
   _headerCleanup: null,
+  _surfaceHandoff: false,
 
   async init() {
     if (this._initialized) return;
@@ -165,7 +166,7 @@ const model = {
     await this.init();
     if (element) this._root = element;
     this._mode = options?.mode === "canvas" ? "canvas" : "modal";
-    if (this._mode === "modal") this.setupDocumentModal(element);
+    if (this._mode === "modal") this.setupMarkdownModal(element);
     this.queueRender();
   },
 
@@ -193,9 +194,22 @@ const model = {
     if (this._mode === "modal") this._root = null;
   },
 
+  beginSurfaceHandoff() {
+    this._surfaceHandoff = true;
+    this.flushInput();
+  },
+
+  finishSurfaceHandoff() {
+    this._surfaceHandoff = false;
+  },
+
+  cancelSurfaceHandoff() {
+    this._surfaceHandoff = false;
+  },
+
   async refresh() {
     try {
-      const status = await callOffice("status");
+      const status = await callEditor("status");
       this.status = status || {};
       this.error = "";
     } catch (error) {
@@ -204,11 +218,11 @@ const model = {
   },
 
   async create(kind = "document", format = "") {
-    const fmt = String(format || (kind === "spreadsheet" ? "ods" : kind === "presentation" ? "odp" : "odt")).toLowerCase();
+    const fmt = "md";
     const title = this.defaultTitle(kind, fmt);
     await this.openSession({
       action: "create",
-      kind,
+      kind: "document",
       format: fmt,
       title,
     });
@@ -221,7 +235,7 @@ const model = {
       workdirPath = response?.settings?.workdir_path || workdirPath;
     } catch {
       try {
-        const home = await callOffice("home");
+        const home = await callEditor("home");
         workdirPath = home?.path || workdirPath;
       } catch {
         // The file browser can still open with the static fallback.
@@ -238,26 +252,14 @@ const model = {
     this.loading = true;
     this.error = "";
     try {
-      const response = await callOffice(payload.action || "open", payload);
+      const response = await callEditor(payload.action || "open", payload);
       if (response?.ok === false) {
-        this.error = response.error || "Document could not be opened.";
+        this.error = response.error || "Markdown could not be opened.";
         return null;
       }
-      if (response?.requires_editor) {
-        const document = normalizeDocument(response.document || response);
-        this.setMessage(`${documentLabel(document)} opens in Editor.`);
-        await openSurface("editor", {
-          path: document.path || response.path || "",
-          file_id: document.file_id || response.file_id || "",
-          refresh: true,
-          source: "office-editor-handoff",
-        });
-        await this.refresh();
-        return response;
-      }
-      if (response?.requires_desktop || this.isDesktopDocument(response)) {
-        const document = normalizeDocument(response.document || response);
-        this.setMessage(`${documentLabel(document)} is ready. Use Open in Desktop to edit it.`);
+      if (response?.requires_desktop) {
+        const document = normalizeMarkdown(response.document || response);
+        this.setMessage(`${documentLabel(document)} uses the Desktop surface.`);
         await this.refresh();
         return response;
       }
@@ -289,12 +291,16 @@ const model = {
   },
 
   selectTab(tabId, options = {}) {
+    this.syncEditorText();
     const tab = this.tabs.find((item) => item.tab_id === tabId) || this.tabs[0] || null;
     this.session = tab;
     this.activeTabId = tab?.tab_id || "";
     this.editorText = String(tab?.text || "");
     this.dirty = Boolean(tab?.dirty);
     this.resetHistory(this.editorText);
+    if (tab?.session_id) {
+      requestEditor("editor_activate", { session_id: tab.session_id }, 2500).catch(() => {});
+    }
     this.queueRender({ focus: Boolean(tab) && options.focus !== false });
   },
 
@@ -307,25 +313,109 @@ const model = {
     return Boolean(tab && tab.tab_id === this.activeTabId);
   },
 
-  async closeTab(tabId) {
+  isTabDirty(tab) {
+    return Boolean(tab?.dirty || (this.isActiveTab(tab) && this.dirty));
+  },
+
+  hasPendingClose() {
+    return Boolean(this.pendingClose);
+  },
+
+  pendingCloseTitle() {
+    const pending = this.pendingClose;
+    if (!pending) return "";
+    if (pending.kind === "all") {
+      return `Close ${pending.totalCount || 0} open files?`;
+    }
+    const tab = this.tabs.find((item) => item.tab_id === pending.tabId);
+    return `Close ${this.tabTitle(tab || {})}?`;
+  },
+
+  pendingCloseMessage() {
+    const pending = this.pendingClose;
+    if (!pending) return "";
+    const dirtyCount = Number(pending.dirtyCount || 0);
+    if (pending.kind === "all") {
+      if (dirtyCount === 0) return "All open Markdown files will be closed.";
+      return `${dirtyCount} open ${dirtyCount === 1 ? "file has" : "files have"} unsaved changes.`;
+    }
+    if (dirtyCount > 0) return "This file has unsaved changes.";
+    return "This file will be closed.";
+  },
+
+  pendingCloseHasDirty() {
+    return Number(this.pendingClose?.dirtyCount || 0) > 0;
+  },
+
+  pendingCloseDiscardLabel() {
+    return this.pendingCloseHasDirty() ? "Discard" : "Close";
+  },
+
+  beginCloseConfirmation(kind, tabIds = []) {
+    const ids = tabIds.filter(Boolean);
+    const tabs = ids.map((id) => this.tabs.find((tab) => tab.tab_id === id)).filter(Boolean);
+    const dirtyCount = tabs.filter((tab) => this.isTabDirty(tab)).length;
+    this.pendingClose = {
+      kind,
+      tabId: kind === "single" ? ids[0] || "" : "",
+      tabIds: ids,
+      totalCount: tabs.length,
+      dirtyCount,
+    };
+    if (kind === "single" && ids[0]) {
+      this.selectTab(ids[0], { focus: false });
+    }
+  },
+
+  cancelPendingClose() {
+    this.pendingClose = null;
+  },
+
+  async confirmPendingClose(options = {}) {
+    const pending = this.pendingClose;
+    if (!pending || this.loading) return;
+    this.pendingClose = null;
+    const save = options.save === true;
+    if (pending.kind === "all") {
+      await this.closeAllFiles({ confirm: false, save, tabIds: pending.tabIds || [] });
+      return;
+    }
+    await this.closeTab(pending.tabId, { confirm: false, save });
+  },
+
+  async closeTab(tabId, options = {}) {
     const tab = this.tabs.find((item) => item.tab_id === tabId);
     if (!tab) return;
-    if (tab.dirty || (this.isActiveTab(tab) && this.dirty)) {
-      const shouldSave = globalThis.confirm?.("Save changes?") ?? true;
-      if (shouldSave) await this.save();
+    if (this.isTabDirty(tab) && options.confirm !== false) {
+      this.beginCloseConfirmation("single", [tab.tab_id]);
+      return;
+    }
+    await this.closeTabNow(tab, { save: options.save === true });
+  },
+
+  async closeTabNow(tab, options = {}) {
+    if (!tab || this.loading) return false;
+    const tabId = tab.tab_id;
+    if (options.save === true && this.isTabDirty(tab)) {
+      const saved = await this.saveTab(tab);
+      if (!saved) return false;
     }
     try {
       if (tab.session_id) {
-        await requestOffice("office_close", { session_id: tab.session_id }, 2500).catch(() => null);
+        await requestEditor("editor_close", { session_id: tab.session_id }, 2500).catch(() => null);
       }
-      await callOffice("close", {
-        session_id: tab.store_session_id || "",
+      await callEditor("close", {
+        session_id: tab.session_id || "",
+        store_session_id: tab.store_session_id || "",
         file_id: tab.file_id || "",
       });
     } catch (error) {
-      console.warn("Document close skipped", error);
+      console.warn("Markdown close skipped", error);
     }
     this.tabs = this.tabs.filter((item) => item.tab_id !== tabId);
+    if (this.pendingClose?.tabId === tabId || this.pendingClose?.tabIds?.includes(tabId)) {
+      this.pendingClose = null;
+    }
     if (this.activeTabId === tabId) {
       this.session = null;
       this.activeTabId = "";
@@ -335,11 +425,37 @@ const model = {
     }
     this.ensureActiveTab();
     await this.refresh();
+    return true;
   },
 
   async closeActiveFile() {
     if (!this.session || this.loading) return;
     await this.closeTab(this.session.tab_id);
+  },
+
+  async closeAllFiles(options = {}) {
+    if (this.loading) return;
+    const requestedIds = Array.isArray(options.tabIds) && options.tabIds.length
+      ? options.tabIds
+      : this.visibleTabs().map((tab) => tab.tab_id);
+    const tabs = requestedIds.map((id) => this.tabs.find((tab) => tab.tab_id === id)).filter(Boolean);
+    if (!tabs.length) return;
+
+    const dirtyTabs = tabs.filter((tab) => this.isTabDirty(tab));
+    if (dirtyTabs.length && options.confirm !== false) {
+      this.beginCloseConfirmation("all", tabs.map((tab) => tab.tab_id));
+      return;
+    }
+
+    this.pendingClose = null;
+    for (const tab of [...tabs]) {
+      const current = this.tabs.find((item) => item.tab_id === tab.tab_id);
+      if (!current) continue;
+      const closed = await this.closeTabNow(current, {
+        save: options.save === true && this.isTabDirty(current),
+      });
+      if (!closed) break;
+    }
   },
 
   async save() {
@@ -351,12 +467,12 @@ const model = {
       let response;
       const payload = { session_id: this.session.session_id, text: this.editorText };
       try {
-        response = await requestOffice("office_save", payload, 10000);
+        response = await requestEditor("editor_save", payload, 10000);
       } catch (_socketError) {
-        response = await callOffice("save", payload);
+        response = await callEditor("save", payload);
       }
       if (response?.ok === false) throw new Error(response.error || "Save failed.");
-      const document = normalizeDocument(response.document || this.session.document || {});
+      const document = normalizeMarkdown(response.document || this.session.document || {});
       const updated = {
         ...this.session,
         text: this.editorText,
@@ -372,6 +488,50 @@ const model = {
       await this.refresh();
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.saving = false;
+    }
+  },
+
+  async saveTab(tab) {
+    if (!tab || this.saving || !this.isMarkdown(tab)) return false;
+    if (this.isActiveTab(tab)) {
+      this.syncEditorText();
+    }
+    this.saving = true;
+    this.error = "";
+    try {
+      let response;
+      const payload = {
+        session_id: tab.session_id,
+        text: this.isActiveTab(tab) ? this.editorText : String(tab.text || ""),
+      };
+      try {
+        response = await requestEditor("editor_save", payload, 10000);
+      } catch (_socketError) {
+        response = await callEditor("save", payload);
+      }
+      if (response?.ok === false) throw new Error(response.error || "Save failed.");
+      const document = normalizeMarkdown(response.document || tab.document || {});
+      const updated = {
+        ...tab,
+        text: payload.text,
+        dirty: false,
+        document,
+        path: document.path || tab.path,
+        file_id: document.file_id || tab.file_id,
+        version: document.version || response.version || tab.version,
+      };
+      this.replaceSession(tab, updated);
+      if (this.isActiveTab(updated)) {
+        this.dirty = false;
+      }
+      this.setMessage("Saved");
+      await this.refresh();
+      return true;
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      return false;
     } finally {
       this.saving = false;
     }
@@ -411,7 +571,7 @@ const model = {
             this.syncEditorText();
             payload.text = this.session?.tab_id === session.tab_id ? this.editorText : session.text || "";
           }
-          return await callOffice("renamed", payload);
+          return await callEditor("renamed", payload);
         },
         onRenamed: async ({ path: renamedPath, response }) => {
           await this.handleActiveFileRenamed(session, renamedPath, response);
@@ -421,13 +581,13 @@ const model = {
   },
 
   async handleActiveFileRenamed(session, renamedPath, renameResponse = null) {
-    const response = renameResponse || await callOffice("renamed", {
+    const response = renameResponse || await callEditor("renamed", {
       file_id: session.file_id || "",
       path: renamedPath,
     });
     if (response?.ok === false) throw new Error(response.error || "Rename failed.");
 
-    const document = normalizeDocument(response.document || session.document || {});
+    const document = normalizeMarkdown(response.document || session.document || {});
     const updated = {
       ...session,
       document,
@@ -451,7 +611,8 @@ const model = {
   },
 
   replaceSession(previous, next) {
-    this.session = next;
+    const wasActive = this.activeTabId === (previous?.tab_id || next.tab_id);
+    if (wasActive) this.session = next;
     const index = this.tabs.findIndex((tab) => tab.tab_id === (previous?.tab_id || next.tab_id));
     if (index >= 0) this.tabs.splice(index, 1, next);
     this.queueRender();
@@ -538,7 +699,7 @@ const model = {
   flushInput() {
     if (!this.session?.session_id || !this.isMarkdown()) return;
     this.syncEditorText();
-    requestOffice("office_input", {
+    requestEditor("editor_input", {
       session_id: this.session.session_id,
       text: this.editorText,
     }, 3000).catch(() => {});
@@ -546,7 +707,7 @@ const model = {
 
   format(command) {
     if (!this.session || !this.isMarkdown()) return;
-    const textarea = this._root?.querySelector?.("[data-office-source]");
+    const textarea = this._root?.querySelector?.("[data-editor-source]");
     if (!textarea) return;
     const start = textarea.selectionStart || 0;
     const end = textarea.selectionEnd || start;
@@ -591,7 +752,7 @@ const model = {
 
   focusEditor(options = {}) {
     if (!this.session || !this.isMarkdown()) return false;
-    const source = this._root?.querySelector?.("[data-office-source]");
+    const source = this._root?.querySelector?.("[data-editor-source]");
     if (!source) return false;
     source.focus?.({ preventScroll: true });
     if (!editorContainsFocus(source)) return false;
@@ -604,11 +765,6 @@ const model = {
     return ext === "md";
   },
 
-  isDesktopDocument(tab = this.session) {
-    const ext = String(tab?.extension || tab?.document?.extension || "").toLowerCase();
-    return DESKTOP_DOCUMENT_EXTENSIONS.has(ext);
-  },
-
   hasActiveFile(tab = this.session) {
     return Boolean(tab && this.isMarkdown(tab));
   },
@@ -619,12 +775,8 @@ const model = {
 
   defaultTitle(kind, fmt) {
     const date = new Date().toISOString().slice(0, 10);
-    if (fmt === "md") return `Document ${date}`;
-    if (fmt === "odt") return `Writer ${date}`;
-    if (fmt === "docx") return `DOCX ${date}`;
-    if (kind === "spreadsheet") return `Spreadsheet ${date}`;
-    if (kind === "presentation") return `Presentation ${date}`;
-    return `Document ${date}`;
+    if (fmt === "md") return `Markdown ${date}`;
+    return `Markdown ${date}`;
   },
 
   tabTitle(tab = {}) {
@@ -642,68 +794,41 @@ const model = {
     tab = tab || {};
     const ext = String(tab.extension || tab.document?.extension || "").toLowerCase();
     if (ext === "md") return "article";
-    if (ext === "odt" || ext === "docx") return "description";
-    if (ext === "ods" || ext === "xlsx") return "table_chart";
-    if (ext === "odp" || ext === "pptx") return "co_present";
     return "draft";
-  },
-
-  async openActiveInDesktop() {
-    const target = this.session?.document || this.session;
-    if (!target?.path && !target?.file_id) return;
-    await openSurface("desktop", {
-      path: target.path || "",
-      file_id: target.file_id || "",
-      refresh: true,
-      source: "office-explicit-action",
-    });
   },
 
   async runNewMenuAction(action = "") {
     const normalized = String(action || "").trim().toLowerCase();
     if (normalized === "open") return await this.openFileBrowser();
-    if (normalized === "markdown") {
-      return await openSurface("editor", { source: "office-editor-handoff" });
-    }
-    if (normalized === "writer") return await this.create("document", "odt");
-    if (normalized === "spreadsheet") return await this.create("spreadsheet", "ods");
-    if (normalized === "presentation") return await this.create("presentation", "odp");
+    if (normalized === "markdown") return await this.create("document", "md");
     return null;
   },
 
   installHeaderNewMenu(header = null) {
-    if (!header || header.querySelector(".office-header-actions")) return () => {};
+    if (!header || header.querySelector(".editor-header-actions")) return () => {};
 
     const root = document.createElement("div");
-    root.className = "office-header-actions";
+    root.className = "editor-header-actions";
     root.innerHTML = `
-      <button type="button" class="office-header-new-button" aria-haspopup="menu" aria-expanded="false">
+      <button type="button" class="editor-header-new-button" aria-haspopup="menu" aria-expanded="false">
         <span class="material-symbols-outlined" aria-hidden="true">add</span>
         <span>New</span>
-        <span class="material-symbols-outlined office-new-chevron" aria-hidden="true">expand_more</span>
+        <span class="material-symbols-outlined editor-new-chevron" aria-hidden="true">expand_more</span>
       </button>
-      <div class="office-new-menu" role="menu" hidden>
-        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="open">
+      <div class="editor-new-menu" role="menu" hidden>
+        <button type="button" class="editor-new-menu-item" role="menuitem" data-editor-new-action="open">
           <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
           <span>Open</span>
         </button>
-        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="writer">
-          <span class="material-symbols-outlined" aria-hidden="true">description</span>
-          <span>Writer</span>
-        </button>
-        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="spreadsheet">
-          <span class="material-symbols-outlined" aria-hidden="true">table_chart</span>
-          <span>Spreadsheet</span>
-        </button>
-        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="presentation">
-          <span class="material-symbols-outlined" aria-hidden="true">co_present</span>
-          <span>Presentation</span>
+        <button type="button" class="editor-new-menu-item" role="menuitem" data-editor-new-action="markdown">
+          <span class="material-symbols-outlined" aria-hidden="true">article</span>
+          <span>Markdown</span>
         </button>
       </div>
     `;
 
-    const button = root.querySelector(".office-header-new-button");
-    const menu = root.querySelector(".office-new-menu");
+    const button = root.querySelector(".editor-header-new-button");
+    const menu = root.querySelector(".editor-new-menu");
     const setOpen = (open) => {
       root.classList.toggle("is-open", open);
       button?.setAttribute("aria-expanded", open.toString());
@@ -714,25 +839,25 @@ const model = {
       event.stopPropagation();
       setOpen(!root.classList.contains("is-open"));
     };
-    const onDocumentClick = (event) => {
+    const onMarkdownClick = (event) => {
       if (!root.contains(event.target)) setOpen(false);
     };
-    const onDocumentKeydown = (event) => {
+    const onMarkdownKeydown = (event) => {
       if (event.key === "Escape") setOpen(false);
     };
 
     button?.addEventListener("click", onButtonClick);
-    for (const item of root.querySelectorAll("[data-office-new-action]")) {
+    for (const item of root.querySelectorAll("[data-editor-new-action]")) {
       item.addEventListener("click", async (event) => {
         event.preventDefault();
         event.stopPropagation();
-        const action = event.currentTarget?.dataset?.officeNewAction || "";
+        const action = event.currentTarget?.dataset?.editorNewAction || "";
         setOpen(false);
         await this.runNewMenuAction(action);
       });
     }
-    document.addEventListener("click", onDocumentClick);
-    document.addEventListener("keydown", onDocumentKeydown);
+    document.addEventListener("click", onMarkdownClick);
+    document.addEventListener("keydown", onMarkdownKeydown);
 
     const firstHeaderAction = header.querySelector(".modal-close");
     if (firstHeaderAction) {
@@ -744,22 +869,50 @@ const model = {
     setOpen(false);
     return () => {
       button?.removeEventListener("click", onButtonClick);
-      document.removeEventListener("click", onDocumentClick);
-      document.removeEventListener("keydown", onDocumentKeydown);
+      document.removeEventListener("click", onMarkdownClick);
+      document.removeEventListener("keydown", onMarkdownKeydown);
       root.remove();
     };
   },
 
-  setupDocumentModal(element = null) {
-    const root = element || document.querySelector(".office-panel");
+  setupMarkdownModal(element = null) {
+    const root = element || document.querySelector(".editor-panel");
     const inner = root?.closest?.(".modal-inner");
     const header = inner?.querySelector?.(".modal-header");
-    if (!inner || !header || inner.dataset.officeModalReady === "1") return;
-    inner.dataset.officeModalReady = "1";
-    inner.classList.add("office-modal");
+    if (!inner || !header || inner.dataset.editorModalReady === "1") return;
+    inner.dataset.editorModalReady = "1";
+    inner.classList.add("editor-modal");
+    const cleanup = [];
+    const closeButton = inner.querySelector(".modal-close");
+    const focusButton = document.createElement("button");
+    focusButton.type = "button";
+    focusButton.className = "modal-dock-button editor-modal-focus-button";
+    focusButton.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">fullscreen</span>';
+    const updateFocusButton = (active) => {
+      const label = active ? "Restore size" : "Focus mode";
+      focusButton.setAttribute("aria-label", label);
+      focusButton.setAttribute("title", label);
+      focusButton.querySelector(".material-symbols-outlined").textContent = active ? "fullscreen_exit" : "fullscreen";
+    };
+    updateFocusButton(false);
+    const onFocusClick = () => {
+      const active = !inner.classList.contains("is-focus-mode");
+      inner.classList.toggle("is-focus-mode", active);
+      updateFocusButton(active);
+    };
+    focusButton.addEventListener("click", onFocusClick);
+    if (closeButton) {
+      closeButton.insertAdjacentElement("beforebegin", focusButton);
+    } else {
+      header.appendChild(focusButton);
+    }
+    cleanup.push(() => focusButton.removeEventListener("click", onFocusClick));
+    cleanup.push(() => focusButton.remove());
+
     this._headerCleanup = () => {
-      delete inner.dataset.officeModalReady;
-      inner.classList.remove("office-modal");
+      cleanup.splice(0).reverse().forEach((entry) => entry());
+      delete inner.dataset.editorModalReady;
+      inner.classList.remove("editor-modal", "is-focus-mode");
     };
     const menuCleanup = this.installHeaderNewMenu(header);
     const previousCleanup = this._headerCleanup;
@@ -770,4 +923,4 @@ const model = {
   },
 };
 
-export const store = createStore("office", model);
+export const store = createStore("editor", model);

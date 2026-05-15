@@ -1,5 +1,6 @@
 import { store as officeStore } from "/plugins/_office/webui/office-store.js";
 import { store as desktopStore } from "/plugins/_desktop/webui/desktop-store.js";
+import { store as editorStore } from "/plugins/_editor/webui/editor-store.js";
 import { open as openSurface } from "/js/surfaces.js";
 
 const SYNC_WINDOW_MS = 10 * 60 * 1000;
@@ -103,7 +104,7 @@ function isExplicitDocumentUiRequest(payload = {}) {
 }
 
 async function openDocumentUiFromResult(target = {}, payload = {}, document = {}) {
-  await openSurface("desktop", {
+  await openSurface(surfaceForDocument(payload, document), {
     path: target.path || "",
     file_id: target.file_id || "",
     refresh: true,
@@ -119,6 +120,10 @@ function documentExtension(payload = {}, document = {}) {
       || document.format
       || "",
   ).toLowerCase();
+}
+
+function surfaceForDocument(payload = {}, document = {}) {
+  return documentExtension(payload, document) === "md" ? "editor" : "desktop";
 }
 
 function isOfficeModalOpen() {
@@ -141,9 +146,35 @@ function isDesktopSurfaceOpen() {
   );
 }
 
+function isEditorSurfaceOpen() {
+  return Boolean(
+    globalThis.document?.querySelector?.(
+      '[data-surface-id="editor"] .editor-panel, .modal-inner[data-surface-id="editor"] .editor-panel, .modal-inner[data-canvas-surface="editor"] .editor-panel',
+    ),
+  );
+}
+
 async function syncOpenDocumentSurfaces(document = {}) {
+  if (documentExtension({}, document) === "md") {
+    await syncOpenEditorSurface(document);
+    return;
+  }
   await syncOpenDesktopCanvas(document);
   await syncOpenOfficeModal(document);
+}
+
+async function syncOpenEditorSurface(document = {}) {
+  const editor = editorStore;
+  if (!editor || !isEditorSurfaceOpen()) return false;
+  if (!hasSameDocument(editor, document)) return false;
+  if (isDirtySameDocument(editor, document)) return false;
+  await editor.openSession?.({
+    path: document.path || "",
+    file_id: document.file_id || "",
+    refresh: true,
+    source: "tool-result-sync",
+  });
+  return true;
 }
 
 async function syncOpenDesktopCanvas(document = {}) {

@@ -21,12 +21,15 @@ from helpers import system_packages
 from plugins._office import hooks
 from plugins._desktop import hooks as desktop_hooks
 from plugins._desktop.helpers import desktop_session
+from plugins._editor.helpers import (
+    markdown_sessions as editor_markdown_sessions,
+    open_files_context,
+)
 from plugins._office.helpers import (
     artifact_editor,
     canvas_context,
     document_store,
     libreoffice,
-    markdown_sessions,
 )
 
 
@@ -51,6 +54,12 @@ def office_state(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(document_store, "_settings", lambda: settings_helpers)
     monkeypatch.setattr(document_store, "_projects", lambda: project_helpers)
+    monkeypatch.setattr(
+        editor_markdown_sessions,
+        "_manager",
+        editor_markdown_sessions.MarkdownSessionManager(),
+        raising=False,
+    )
 
     workdir.mkdir(parents=True, exist_ok=True)
     documents.mkdir(parents=True, exist_ok=True)
@@ -403,6 +412,33 @@ def test_sessions_and_canvas_context_are_neutral(office_state):
     assert document_store.get_open_documents() == []
 
 
+def test_editor_open_files_are_scoped_to_active_context(office_state):
+    first = document_store.create_document("document", "First Editor Note", "md", "First private body.")
+    second = document_store.create_document("document", "Second Editor Note", "md", "Second private body.")
+    manager = editor_markdown_sessions.get_manager()
+
+    first_session = manager.open(first, context_id="ctx-a")
+    second_session = manager.open(second, context_id="ctx-b")
+    manager.input(first_session["session_id"], text="Unsaved ctx-a text")
+    reopened_first = manager.open(first, context_id="ctx-a")
+
+    ctx_a_files = manager.list_open("ctx-a")
+    ctx_b_files = manager.list_open("ctx-b")
+    prompt_context = open_files_context.build_context("ctx-a")
+
+    assert reopened_first["session_id"] == first_session["session_id"]
+    assert reopened_first["text"] == "Unsaved ctx-a text"
+    assert [item["file_id"] for item in ctx_a_files] == [first["file_id"]]
+    assert [item["file_id"] for item in ctx_b_files] == [second["file_id"]]
+    assert ctx_a_files[0]["dirty"] is True
+    assert ctx_a_files[0]["active"] is True
+    assert ctx_a_files[0]["open_sessions"] == 1
+    assert "First Editor Note.md" in prompt_context
+    assert "Second Editor Note.md" not in prompt_context
+    assert "First private body" not in prompt_context
+    assert "Unsaved ctx-a text" not in prompt_context
+
+
 def test_markdown_save_tracks_version_history(office_state):
     doc = document_store.create_document("document", "Versioned", "md", "First")
     updated = document_store.write_markdown(doc["file_id"], "# Versioned\n\nSecond\n")
@@ -462,8 +498,8 @@ def test_document_rename_saves_dirty_markdown_and_removes_original(office_state)
 
 
 def test_direct_markdown_edits_refresh_open_canvas_session(office_state, monkeypatch):
-    manager = markdown_sessions.MarkdownSessionManager()
-    monkeypatch.setattr(markdown_sessions, "_manager", manager, raising=False)
+    manager = editor_markdown_sessions.MarkdownSessionManager()
+    monkeypatch.setattr(editor_markdown_sessions, "_manager", manager, raising=False)
     doc = document_store.create_document("document", "Receiver", "md", "First")
     session = manager.open(doc)
 
@@ -473,7 +509,7 @@ def test_direct_markdown_edits_refresh_open_canvas_session(office_state, monkeyp
 
 
 def test_markdown_session_rejects_office_binaries(office_state):
-    manager = markdown_sessions.MarkdownSessionManager()
+    manager = editor_markdown_sessions.MarkdownSessionManager()
     doc = document_store.create_document("document", "Desktop Only", "odt", "Native text")
 
     with pytest.raises(ValueError, match="Open .odt files in the Desktop"):

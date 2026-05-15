@@ -492,7 +492,7 @@ def read_text_for_editor(doc: dict[str, Any]) -> str:
 
 
 def write_markdown(file_id: str, content: str) -> dict[str, Any]:
-    return replace_document_bytes(file_id, str(content or "").encode("utf-8"), actor="office:markdown")
+    return replace_document_bytes(file_id, str(content or "").encode("utf-8"), actor="editor:markdown")
 
 
 def replace_document_bytes(

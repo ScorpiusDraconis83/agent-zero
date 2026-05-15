@@ -24,6 +24,13 @@ export const CORE_SURFACES = [
     order: 20,
     modalPath: "/plugins/_desktop/webui/main.html",
   },
+  {
+    id: "editor",
+    title: "Editor",
+    icon: "article",
+    order: 30,
+    modalPath: "/plugins/_editor/webui/main.html",
+  },
 ];
 
 export function normalizeSurfaceId(surfaceId = "") {

@@ -1,7 +1,8 @@
 import { showButtonFeedback } from "/components/messages/action-buttons/simple-action-buttons.js";
 import { open as openSurface } from "/js/surfaces.js";
 
-const DESKTOP_FORMATS = ["md", "odt", "ods", "odp", "docx", "xlsx", "pptx"];
+const EDITOR_FORMATS = ["md"];
+const DESKTOP_FORMATS = ["odt", "ods", "odp", "docx", "xlsx", "pptx"];
 
 function basename(path = "") {
   const value = String(path || "").split("?")[0].split("#")[0];
@@ -104,8 +105,26 @@ export async function openDocumentInDesktop(document = {}) {
   });
 }
 
+export async function openDocumentInEditor(document = {}) {
+  await openSurface("editor", {
+    path: document.path || "",
+    file_id: document.file_id || "",
+    refresh: true,
+    source: "message-action",
+  });
+}
+
 export async function openDocumentArtifact(document = {}) {
+  if (usesEditor(document)) {
+    await openDocumentInEditor(document);
+    return;
+  }
   await openDocumentInDesktop(document);
+}
+
+function usesEditor(doc = {}) {
+  const format = String(doc.format || doc.extension || "").toLowerCase();
+  return EDITOR_FORMATS.includes(format);
 }
 
 function usesDesktop(doc = {}) {
@@ -118,7 +137,7 @@ function canvasActionTitle(doc = {}) {
   if (["odt", "docx"].includes(format)) return "Open in canvas with Writer";
   if (["ods", "xlsx"].includes(format)) return "Open in canvas with Calc";
   if (["odp", "pptx"].includes(format)) return "Open in canvas with Impress";
-  if (format === "md") return "Open Markdown in canvas";
+  if (format === "md") return "Open Markdown in Editor";
   return "Open in canvas";
 }
 

@@ -1,0 +1,631 @@
+<html>
+<head>
+  <script type="module">
+    import { store } from "/plugins/_editor/webui/editor-store.js";
+  </script>
+</head>
+<body>
+  <div x-data>
+    <template x-if="$store.editor">
+      <div class="editor-panel" x-create="$store.editor.onMount($el, xAttrs($el) || {})" x-destroy="$store.editor.cleanup()">
+        <div class="editor-shell">
+          <div class="editor-tabs" x-show="$store.editor.visibleTabs().length > 0" style="display: none;" role="tablist" aria-label="Open Markdown files">
+            <template x-for="tab in $store.editor.visibleTabs()" :key="tab.tab_id">
+              <div
+                class="editor-tab-shell"
+                :class="{ 'is-active': $store.editor.isActiveTab(tab), 'is-dirty': $store.editor.isTabDirty(tab), 'is-pending-close': $store.editor.pendingClose?.tabId === tab.tab_id }"
+              >
+                <button
+                  type="button"
+                  class="editor-tab"
+                  role="tab"
+                  :aria-selected="$store.editor.isActiveTab(tab).toString()"
+                  :title="$store.editor.tabLabel(tab)"
+                  @click="$store.editor.selectTab(tab.tab_id)"
+                >
+                  <span class="material-symbols-outlined editor-tab-icon" aria-hidden="true" x-text="$store.editor.tabIcon(tab)"></span>
+                  <span class="editor-tab-title" x-text="$store.editor.tabTitle(tab)"></span>
+                </button>
+                <button
+                  type="button"
+                  class="editor-tab-close"
+                  title="Close file"
+                  aria-label="Close file"
+                  @click.stop="$store.editor.closeTab(tab.tab_id)"
+                >
+                  <span class="material-symbols-outlined" aria-hidden="true">close</span>
+                </button>
+              </div>
+            </template>
+          </div>
+
+          <div class="editor-close-confirm" x-show="$store.editor.hasPendingClose()" style="display: none;" role="status">
+            <span class="material-symbols-outlined editor-close-confirm-icon" aria-hidden="true">warning</span>
+            <div class="editor-close-confirm-copy">
+              <span class="editor-close-confirm-title" x-text="$store.editor.pendingCloseTitle()"></span>
+              <span class="editor-close-confirm-message" x-text="$store.editor.pendingCloseMessage()"></span>
+            </div>
+            <div class="editor-close-confirm-actions">
+              <button
+                type="button"
+                class="editor-text-button is-primary"
+                x-show="$store.editor.pendingCloseHasDirty()"
+                :disabled="$store.editor.saving"
+                @click="$store.editor.confirmPendingClose({ save: true })"
+              >
+                Save &amp; Close
+              </button>
+              <button
+                type="button"
+                class="editor-text-button"
+                :disabled="$store.editor.saving"
+                @click="$store.editor.confirmPendingClose({ save: false })"
+                x-text="$store.editor.pendingCloseDiscardLabel()"
+              ></button>
+              <button type="button" class="editor-text-button" :disabled="$store.editor.saving" @click="$store.editor.cancelPendingClose()">Cancel</button>
+            </div>
+          </div>
+
+          <div class="editor-document-header" x-show="$store.editor.hasActiveFile()" style="display: none;">
+            <div class="editor-document-title" :title="$store.editor.tabLabel($store.editor.session)">
+              <span class="material-symbols-outlined editor-document-icon" aria-hidden="true" x-text="$store.editor.tabIcon($store.editor.session)"></span>
+              <span class="editor-document-name" x-text="$store.editor.tabTitle($store.editor.session)"></span>
+              <span class="editor-document-dirty" x-show="$store.editor.dirty" aria-hidden="true">*</span>
+            </div>
+
+            <button
+              type="button"
+              class="editor-icon-button editor-document-save-button"
+              title="Save"
+              aria-label="Save"
+              :class="{ 'is-primary': $store.editor.dirty }"
+              :disabled="$store.editor.saving"
+              @click="$store.editor.save()"
+            >
+              <span class="material-symbols-outlined" :class="{ spinning: $store.editor.saving }" x-text="$store.editor.saving ? 'progress_activity' : 'save'"></span>
+            </button>
+
+            <div class="editor-file-actions" x-data="{ open: false }" @click.outside="open = false" @keydown.escape.window="open = false">
+              <button
+                type="button"
+                class="editor-icon-button editor-file-menu-button"
+                title="File actions"
+                aria-label="File actions"
+                aria-haspopup="menu"
+                :aria-expanded="open.toString()"
+                :disabled="$store.editor.saving"
+                @click.stop="open = !open"
+              >
+                <span class="material-symbols-outlined">more_vert</span>
+              </button>
+              <div class="editor-new-menu editor-file-menu" role="menu" x-show="open" @click.stop>
+                <button type="button" class="editor-new-menu-item" role="menuitem" :disabled="$store.editor.saving" @click="open = false; $store.editor.renameActiveFile()">
+                  <span class="material-symbols-outlined" aria-hidden="true">edit</span>
+                  <span>Rename</span>
+                </button>
+                <button type="button" class="editor-new-menu-item" role="menuitem" :disabled="$store.editor.loading" @click="open = false; $store.editor.closeActiveFile()">
+                  <span class="material-symbols-outlined" aria-hidden="true">close</span>
+                  <span>Close File</span>
+                </button>
+                <button type="button" class="editor-new-menu-item" role="menuitem" :disabled="$store.editor.loading || $store.editor.visibleTabs().length === 0" @click="open = false; $store.editor.closeAllFiles()">
+                  <span class="material-symbols-outlined" aria-hidden="true">close</span>
+                  <span>Close All</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="editor-toolbar" x-show="$store.editor.session && $store.editor.isMarkdown()" style="display: none;">
+            <div class="editor-toolbar-row">
+              <div class="editor-tool-group editor-source-tools">
+                <button type="button" class="editor-icon-button" title="Undo" aria-label="Undo" :disabled="!$store.editor.canUndo()" @click="$store.editor.undo()">
+                  <span class="material-symbols-outlined">undo</span>
+                </button>
+                <button type="button" class="editor-icon-button" title="Redo" aria-label="Redo" :disabled="!$store.editor.canRedo()" @click="$store.editor.redo()">
+                  <span class="material-symbols-outlined">redo</span>
+                </button>
+                <button type="button" class="editor-icon-button" title="Bold" aria-label="Bold" @click="$store.editor.format('bold')">
+                  <span class="material-symbols-outlined">format_bold</span>
+                </button>
+                <button type="button" class="editor-icon-button" title="Italic" aria-label="Italic" @click="$store.editor.format('italic')">
+                  <span class="material-symbols-outlined">format_italic</span>
+                </button>
+                <button type="button" class="editor-icon-button" title="List" aria-label="List" @click="$store.editor.format('list')">
+                  <span class="material-symbols-outlined">format_list_bulleted</span>
+                </button>
+                <button type="button" class="editor-icon-button" title="Numbered list" aria-label="Numbered list" @click="$store.editor.format('numbered')">
+                  <span class="material-symbols-outlined">format_list_numbered</span>
+                </button>
+                <button type="button" class="editor-icon-button" title="Table" aria-label="Table" @click="$store.editor.format('table')">
+                  <span class="material-symbols-outlined">table</span>
+                </button>
+              </div>
+              <span class="editor-toolbar-spacer"></span>
+            </div>
+          </div>
+
+          <div class="editor-state-line" x-show="$store.editor.message || $store.editor.error || $store.editor.loading" style="display: none;">
+            <span class="material-symbols-outlined" :class="{ spinning: $store.editor.loading }" x-text="$store.editor.loading ? 'progress_activity' : ($store.editor.error ? 'error' : 'check_circle')"></span>
+            <span x-text="$store.editor.error || $store.editor.message || 'Working'"></span>
+          </div>
+
+          <div class="editor-body">
+            <div class="editor-wrap" x-show="$store.editor.session" style="display: none;">
+              <div class="editor-scroll" @click.self="$store.editor.focusEditor()">
+                <textarea
+                  class="editor-source-editor"
+                  data-editor-source
+                  aria-label="Markdown source"
+                  x-model="$store.editor.editorText"
+                  @input="$store.editor.onSourceInput()"
+                  @blur="$store.editor.flushInput()"
+                  spellcheck="true"
+                ></textarea>
+              </div>
+            </div>
+
+            <div class="editor-empty" x-show="!$store.editor.session && !$store.editor.loading" style="display: none;">
+              <div class="editor-empty-actions">
+                <button type="button" class="editor-icon-button editor-command-button" @click="$store.editor.runNewMenuAction('open')">
+                  <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
+                  <span class="editor-button-label">Open</span>
+                </button>
+                <button type="button" class="editor-icon-button editor-command-button" @click="$store.editor.runNewMenuAction('markdown')">
+                  <span class="material-symbols-outlined" aria-hidden="true">article</span>
+                  <span class="editor-button-label">Markdown</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <style>
+    .editor-panel,
+    .editor-shell {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      background: var(--color-background);
+      color: var(--color-text);
+    }
+
+    .editor-panel {
+      container-type: inline-size;
+    }
+
+    .modal-inner.editor-modal {
+      box-sizing: border-box;
+      width: min(1040px, calc(100vw - 32px));
+      height: min(760px, calc(100vh - 32px));
+      min-width: min(640px, calc(100vw - 16px));
+      min-height: min(460px, calc(100vh - 16px));
+      max-width: none;
+      max-height: none;
+      resize: both;
+      overflow: hidden;
+    }
+
+    .modal-inner.editor-modal.is-focus-mode {
+      left: 8px !important;
+      top: 8px !important;
+      width: calc(100vw - 16px) !important;
+      height: calc(100vh - 16px) !important;
+      transform: none !important;
+    }
+
+    .modal-inner.editor-modal .modal-scroll,
+    .modal-inner.editor-modal .modal-bd.editor-modal-body,
+    .modal-inner.editor-modal .modal-bd.editor-modal-body > x-component,
+    .modal-inner.editor-modal .modal-bd.editor-modal-body > x-component > div[x-data],
+    .modal-inner.editor-modal .modal-bd.editor-modal-body > x-component > div[x-data] > .editor-panel {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      width: 100%;
+      height: 100%;
+      max-height: none;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    .modal-inner.editor-modal .modal-header {
+      grid-template-columns: minmax(0, 1fr) repeat(4, auto);
+    }
+
+    .editor-tabs {
+      display: flex;
+      gap: 6px;
+      min-height: 42px;
+      padding: 7px 10px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border), transparent 22%);
+      background: color-mix(in srgb, var(--color-panel), var(--color-background) 28%);
+    }
+
+    .editor-tab-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 28px;
+      align-items: center;
+      min-width: 150px;
+      max-width: 240px;
+    }
+
+    .editor-tab,
+    .editor-tab-close,
+    .editor-icon-button {
+      border: 1px solid color-mix(in srgb, var(--color-border), transparent 12%);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-panel), var(--color-background) 16%);
+      color: inherit;
+      cursor: pointer;
+      transition: border-color 120ms ease, background 120ms ease;
+    }
+
+    .editor-tab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      height: 28px;
+      padding: 0 8px;
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      text-align: left;
+    }
+
+    .editor-tab-close {
+      display: grid;
+      place-items: center;
+      height: 28px;
+      padding: 0;
+      border-left: 0;
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+    }
+
+    .editor-tab-shell.is-active .editor-tab,
+    .editor-tab-shell.is-active .editor-tab-close,
+    .editor-icon-button.is-primary {
+      border-color: color-mix(in srgb, #2c7be5, var(--color-border) 36%);
+      background: color-mix(in srgb, #2c7be5, var(--color-panel) 88%);
+    }
+
+    .editor-tab-shell.is-pending-close .editor-tab,
+    .editor-tab-shell.is-pending-close .editor-tab-close {
+      border-color: color-mix(in srgb, #d98b2b, var(--color-border) 30%);
+      background: color-mix(in srgb, #d98b2b, var(--color-panel) 88%);
+    }
+
+    .editor-tab-shell.is-dirty .editor-tab-title::after {
+      content: " *";
+      color: #2ca58d;
+    }
+
+    .editor-tab-title,
+    .editor-document-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .editor-tab-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .editor-document-header,
+    .editor-toolbar,
+    .editor-state-line,
+    .editor-close-confirm {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border), transparent 22%);
+      padding: 7px 10px;
+      min-width: 0;
+    }
+
+    .editor-document-header {
+      min-height: 38px;
+      background: color-mix(in srgb, var(--color-panel), var(--color-background) 30%);
+    }
+
+    .editor-close-confirm {
+      min-height: 44px;
+      background: color-mix(in srgb, #d98b2b 9%, var(--color-background));
+      color: var(--color-text);
+    }
+
+    .editor-close-confirm-icon {
+      color: #d98b2b;
+      font-size: 20px;
+    }
+
+    .editor-close-confirm-copy {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-width: 0;
+      gap: 2px;
+    }
+
+    .editor-close-confirm-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .editor-close-confirm-message {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--color-text-secondary);
+      font-size: 12px;
+      letter-spacing: 0;
+    }
+
+    .editor-close-confirm-actions {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .editor-document-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      flex: 1 1 auto;
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    .editor-document-dirty {
+      color: #2ca58d;
+      font-weight: 800;
+    }
+
+    .editor-toolbar {
+      padding: 6px 10px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--color-background), var(--color-panel) 48%);
+    }
+
+    .editor-toolbar-row,
+    .editor-tool-group {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .editor-toolbar-row {
+      width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .editor-toolbar-spacer {
+      flex: 1 1 16px;
+      min-width: 8px;
+    }
+
+    .editor-icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      padding: 0;
+    }
+
+    .editor-icon-button:hover:not(:disabled),
+    .editor-tab:hover,
+    .editor-tab-close:hover {
+      border-color: color-mix(in srgb, #2c7be5, var(--color-border) 45%);
+      background: color-mix(in srgb, var(--color-panel), #2c7be5 8%);
+    }
+
+    .editor-icon-button:disabled {
+      cursor: default;
+      opacity: 0.42;
+    }
+
+    .editor-file-actions,
+    .editor-header-actions {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+    }
+
+    .editor-new-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      z-index: 4000;
+      min-width: 184px;
+      padding: 5px;
+      border: 1px solid color-mix(in srgb, var(--color-border), transparent 10%);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-panel), var(--color-background) 10%);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+    }
+
+    .editor-new-menu[hidden] {
+      display: none;
+    }
+
+    .editor-new-menu-item,
+    .editor-header-new-button {
+      appearance: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--color-text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .editor-header-new-button {
+      justify-content: center;
+      height: 34px;
+      padding: 0 9px 0 8px;
+      border-radius: 7px;
+      opacity: 0.82;
+    }
+
+    .editor-new-menu-item {
+      width: 100%;
+      height: 32px;
+      padding: 0 8px;
+      border-radius: 6px;
+      text-align: left;
+    }
+
+    .editor-text-button {
+      appearance: none;
+      height: 28px;
+      padding: 0 9px;
+      border: 1px solid color-mix(in srgb, var(--color-border), transparent 10%);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--color-panel), var(--color-background) 18%);
+      color: var(--color-text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .editor-text-button.is-primary {
+      border-color: color-mix(in srgb, #2c7be5, var(--color-border) 35%);
+      background: color-mix(in srgb, #2c7be5, var(--color-panel) 82%);
+    }
+
+    .editor-header-new-button:hover,
+    .editor-header-actions.is-open .editor-header-new-button,
+    .editor-new-menu-item:hover,
+    .editor-text-button:hover:not(:disabled) {
+      opacity: 1;
+      border-color: color-mix(in srgb, var(--color-primary) 24%, transparent);
+      background: color-mix(in srgb, var(--color-background-hover) 76%, transparent);
+    }
+
+    .editor-text-button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
+    @container (max-width: 560px) {
+      .editor-close-confirm {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .editor-close-confirm-actions {
+        flex-wrap: wrap;
+      }
+    }
+
+    .editor-body,
+    .editor-wrap,
+    .editor-scroll {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .editor-body {
+      position: relative;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .editor-wrap,
+    .editor-scroll {
+      width: 100%;
+      height: 100%;
+    }
+
+    .editor-source-editor {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      resize: none;
+      border: 0;
+      outline: none;
+      padding: 18px 20px;
+      background: var(--color-background);
+      color: var(--color-text);
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      letter-spacing: 0;
+    }
+
+    .editor-empty {
+      display: grid;
+      flex: 1 1 auto;
+      place-items: center;
+      align-content: center;
+      gap: 12px;
+      color: color-mix(in srgb, var(--color-text) 70%, transparent);
+    }
+
+    .editor-empty-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .editor-command-button {
+      display: inline-flex;
+      width: auto;
+      max-width: 140px;
+      padding: 0 9px;
+      gap: 6px;
+    }
+
+    .editor-button-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .editor-state-line {
+      min-height: 34px;
+      font-size: 12px;
+      color: color-mix(in srgb, var(--color-text) 80%, transparent);
+    }
+  </style>
+</body>
+</html>

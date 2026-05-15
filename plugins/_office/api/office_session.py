@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from helpers.api import ApiHandler, Request
 from plugins._desktop.helpers import desktop_session
-from plugins._office.helpers import document_store, libreoffice, markdown_sessions
+from plugins._office.helpers import document_store, libreoffice
 
 
 class OfficeSession(ApiHandler):
@@ -28,7 +28,7 @@ class OfficeSession(ApiHandler):
                 doc = document_store.create_document(
                     kind=str(input.get("kind") or "document"),
                     title=str(input.get("title") or "Untitled"),
-                    fmt=str(input.get("format") or "md"),
+                    fmt=str(input.get("format") or "odt"),
                     content=str(input.get("content") or ""),
                     path=str(input.get("path") or ""),
                     context_id=context_id,
@@ -75,6 +75,19 @@ class OfficeSession(ApiHandler):
 
     async def _open_document(self, doc: dict, input: dict, request: Request) -> dict:
         mode = "edit" if str(input.get("mode") or "edit").lower() == "edit" else "view"
+        if str(doc.get("extension") or "").lower() == "md":
+            return {
+                "ok": True,
+                "requires_editor": True,
+                "file_id": doc["file_id"],
+                "title": doc["basename"],
+                "extension": doc["extension"],
+                "path": doc["path"],
+                "text": "",
+                "document": _public_doc(doc),
+                "version": document_store.item_version(doc),
+                "mode": mode,
+            }
         if str(doc.get("extension") or "").lower() in desktop_session.OFFICIAL_EXTENSIONS:
             if input.get("open_in_desktop") is not True:
                 return {
@@ -119,29 +132,10 @@ class OfficeSession(ApiHandler):
                 "store_session_id": store_session["session_id"],
                 "mode": mode,
             }
-        store_session = document_store.create_session(
-            doc["file_id"],
-            user_id=str(input.get("user_id") or "agent-zero-user"),
-            permission="write" if mode == "edit" else "read",
-            origin=self._origin(request),
-        )
-        try:
-            editor = markdown_sessions.get_manager().open(doc, sid="")
-        except ValueError as exc:
-            document_store.close_session(session_id=store_session["session_id"])
-            return {"ok": False, "error": str(exc)}
-        return {
-            **editor,
-            "store_session_id": store_session["session_id"],
-            "session_id": editor["session_id"],
-            "mode": mode,
-        }
+        return {"ok": False, "error": f".{doc.get('extension', '')} documents are not supported by LibreOffice."}
 
     def _save(self, input: dict) -> dict:
-        session_id = str(input.get("session_id") or "").strip()
-        if not session_id:
-            return {"ok": False, "error": "session_id is required."}
-        return markdown_sessions.get_manager().save(session_id, text=input.get("text"))
+        return {"ok": False, "error": "Markdown saves use /plugins/_editor/editor_session."}
 
     def _renamed(self, input: dict, context_id: str = "") -> dict:
         file_id = str(input.get("file_id") or "").strip()

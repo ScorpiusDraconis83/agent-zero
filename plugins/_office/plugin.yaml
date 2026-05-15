@@ -1,6 +1,6 @@
 name: _office
 title: LibreOffice
-description: Markdown writing and ODF-first LibreOffice document artifacts.
+description: ODF-first LibreOffice document artifacts and compatibility document tooling.
 version: "0.1"
 settings_sections:
   - developer

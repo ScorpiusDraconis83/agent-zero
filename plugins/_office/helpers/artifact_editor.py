@@ -271,7 +271,7 @@ def _looks_like_replace_operation(operation: str = "") -> bool:
 
 def _refresh_open_editor_sessions(file_id: str) -> None:
     try:
-        from plugins._office.helpers import markdown_sessions
+        from plugins._editor.helpers import markdown_sessions
 
         markdown_sessions.get_manager().refresh_document(file_id)
     except Exception:

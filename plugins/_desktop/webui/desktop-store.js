@@ -535,7 +535,7 @@ const model = {
   },
 
   async create(kind = "document", format = "") {
-    const fmt = String(format || (kind === "spreadsheet" ? "ods" : kind === "presentation" ? "odp" : "md")).toLowerCase();
+    const fmt = String(format || (kind === "spreadsheet" ? "ods" : kind === "presentation" ? "odp" : "odt")).toLowerCase();
     const title = this.defaultTitle(kind, fmt);
     this.loading = true;
     this.error = "";
@@ -2295,7 +2295,6 @@ const model = {
 
   defaultTitle(kind, fmt) {
     const date = new Date().toISOString().slice(0, 10);
-    if (fmt === "md") return `Document ${date}`;
     if (fmt === "odt") return `Writer ${date}`;
     if (fmt === "docx") return `DOCX ${date}`;
     if (kind === "spreadsheet") return `Spreadsheet ${date}`;
@@ -2328,7 +2327,6 @@ const model = {
   async runNewMenuAction(action = "") {
     const normalized = String(action || "").trim().toLowerCase();
     if (normalized === "open") return await this.openFileBrowser();
-    if (normalized === "markdown") return await this.create("document", "md");
     if (normalized === "writer") return await this.create("document", "odt");
     if (normalized === "spreadsheet") return await this.create("spreadsheet", "ods");
     if (normalized === "presentation") return await this.create("presentation", "odp");
@@ -2350,10 +2348,6 @@ const model = {
         <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="open">
           <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
           <span>Open</span>
-        </button>
-        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="markdown">
-          <span class="material-symbols-outlined" aria-hidden="true">article</span>
-          <span>Markdown</span>
         </button>
         <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="writer">
           <span class="material-symbols-outlined" aria-hidden="true">description</span>

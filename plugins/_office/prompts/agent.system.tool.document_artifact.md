@@ -6,6 +6,7 @@ actions: create open read edit inspect export version_history restore_version st
 common args: action kind title format content path file_id operation find replace
 optional UI intent args: open_in_canvas open_in_desktop
 create/read/edit results save or update artifacts only; they do not open a surface automatically unless the user explicitly asks to open the document UI
+Markdown opens in the Editor surface; ODT/ODS/ODP/DOCX/XLSX/PPTX open in Desktop
 use action `open`, `open_in_canvas: true`, or `open_in_desktop: true` only when the user explicitly asks to open the document/editor/Desktop
 for action `edit`, use operation and put append/prepend/set text in `content` (example: operation `append_text`, content "new line")
 after create/edit, answer briefly with what changed and the saved path when useful; do not write faux UI action labels like "Open document" or "Download file"
